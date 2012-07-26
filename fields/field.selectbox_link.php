@@ -79,25 +79,31 @@
 			if(!is_array($this->get('related_field_id'))) return $values;
 
 			// find the sections of the related fields
-			$sections = Symphony::Database()->fetch("
+/*			$sections = Symphony::Database()->fetch("
 				SELECT DISTINCT (s.id), s.name, f.id as `field_id`
 				FROM `tbl_sections` AS `s`
 				LEFT JOIN `tbl_fields` AS `f` ON `s`.id = `f`.parent_section
 				WHERE `f`.id IN ('" . implode("','", $this->get('related_field_id')) . "')
 				ORDER BY s.sortorder ASC
-			");
+			");*/
+
+			$sections = SectionManager::index()->xpath('section[(fields/field/unique_hash=\''.implode('\') or (fields/field/unique_hash=\'',
+				$this->get('related_field_id')).'\')]');
+
+			// print_r($sections);
 
 			if(is_array($sections) && !empty($sections)){
 				foreach($sections as $section) {
+					$sectionID = SectionManager::lookup()->getId((string)$section->unique_hash);
 					$group = array(
-						'name' => $section['name'],
-						'section' => $section['id'],
+						'name' => (string)$section->name,
+						'section' => $sectionID,
 						'values' => array()
 					);
 
 					// build a list of entry IDs with the correct sort order
 					EntryManager::setFetchSorting('date', 'DESC');
-					$entries = EntryManager::fetch(NULL, $section['id'], $limit, 0, null, null, false, false);
+					$entries = EntryManager::fetch(NULL, $sectionID, $limit, 0, null, null, false, false);
 
 					$results = array();
 					foreach($entries as $entry) {
@@ -106,7 +112,13 @@
 
 					// if a value is already selected, ensure it is added to the list (if it isn't in the available options)
 					if(!is_null($existing_selection) && !empty($existing_selection)){
-						$entries_for_field = $this->findEntriesForField($existing_selection, $section['field_id']);
+						// $existing_selection = the selected entry
+
+						$fields = FieldManager::fetchByXPath('section[unique_hash=\''.(string)$section->unique_hash.
+							'\']/fields/field[(unique_hash=\''.implode('\') or (unique_hash=\'', $this->get('related_field_id')).'\')]');
+						$field = array_pop($fields);
+
+						$entries_for_field = $this->findEntriesForField($existing_selection, $field->get('id'));
 						$results = array_merge($results, $entries_for_field);
 					}
 
@@ -311,7 +323,7 @@
 					if($f->get('id') != $this->get('id') && $f->canPrePopulate()) {
 						$fields[] = array(
 							$f->get('id'),
-							is_array($this->get('related_field_id')) ? in_array($f->get('id'), $this->get('related_field_id')) : false,
+							is_array($this->get('related_field_id')) ? in_array($f->get('unique_hash'), $this->get('related_field_id')) : false,
 							$f->get('label')
 						);
 					}
@@ -380,20 +392,23 @@
 			if($id === false) return false;
 
 			$fields = array();
-			$fields['field_id'] = $id;
+			// $fields['field_id'] = $id;
 			if($this->get('related_field_id') != '') $fields['related_field_id'] = $this->get('related_field_id');
 			$fields['allow_multiple_selection'] = $this->get('allow_multiple_selection') ? $this->get('allow_multiple_selection') : 'no';
 			$fields['show_association'] = $this->get('show_association') == 'yes' ? 'yes' : 'no';
 			$fields['limit'] = max(1, (int)$this->get('limit'));
-			$fields['related_field_id'] = implode(',', $this->get('related_field_id'));
+			$hashes = array();
+			foreach($this->get('related_field_id') as $related_id)
+			{
+				$hashes[] = FieldManager::lookup()->getHash($related_id);
+			}
+			$fields['related_field_id'] = implode(',', $hashes);
 
-			Symphony::Database()->delete("tbl_fields_" . $this->handle(), "`field_id` = '$id'");
+			FieldManager::saveSettings($id, $fields);
 
-			if(!Symphony::Database()->insert($fields, 'tbl_fields_' . $this->handle())) return false;
-
-			$this->removeSectionAssociation($id);
+			SectionManager::removeSectionAssociation($id);
 			foreach($this->get('related_field_id') as $field_id){
-				$this->createSectionAssociation(NULL, $id, $field_id, $this->get('show_association') == 'yes' ? true : false);
+				SectionManager::createSectionAssociation(NULL, $id, $field_id, $this->get('show_association') == 'yes' ? true : false);
 			}
 
 			return true;
